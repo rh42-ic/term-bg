@@ -18,7 +18,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             mode: OutputMode::DarkLight,
-            timeout_ms: 50,
+            timeout_ms: 500,
         }
     }
 }
@@ -294,7 +294,7 @@ fn calculate_luma(r: u8, g: u8, b: u8) -> u8 {
 fn print_failure(config: &Config) {
     match config.mode {
         OutputMode::DarkLight => print!("dark"),
-        OutputMode::Rgb => print!("0"),
+        OutputMode::Rgb => print!("#000000"),
         OutputMode::Luma => print!("0"),
     }
     process::exit(1);

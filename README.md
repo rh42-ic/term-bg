@@ -1,14 +1,13 @@
 # term-bg
 
-A fast, zero-dependency (only `libc`) CLI tool to detect the terminal's background color (dark or light) or extract its RGB/Luma values. 
+A fast, zero-dependency CLI tool to detect the terminal's background color (dark or light) or extract its RGB/Luma values. 
 
 The background detection logic is extracted from [Yazi](https://github.com/sxyazi/yazi), fully optimized for speed and binary size to be seamlessly integrated into scripts.
 
 ## Features
 
 - **Extreme Speed**: Bypasses heavy TUI libraries or async runtimes. Uses direct `/dev/tty` syscalls via `libc` and raw terminal mode `termios`.
-- **Zero-Cost Math**: Computes the Luma value using the BT.709 standard formula (`Y ≈ 0.2126 R + 0.7152 G + 0.0722 B`) exclusively through integer bit-shifting for maximum performance.
-- **Fail-Safe**: Includes a strict configurable timeout (default 50ms). In environments where OSC 11 queries are unsupported or hanging, `term-bg` will safely exit with a default response and a `1` exit code, never hanging your scripts.
+- **Fail-Safe**: Includes a strict configurable timeout (default 500ms). In environments where OSC 11 queries are unsupported or hanging, `term-bg` will safely exit with a default response and a `1` exit code, never hanging your scripts.
 
 ## Installation
 
@@ -26,7 +25,7 @@ cp target/release/term-bg ~/.local/bin/
 ```
 
 ### Pre-built Binaries
-GitHub Actions automatically builds and publishes binaries for Linux (gnu/musl), macOS (x86_64/arm64), and Windows (x86_64) on every release tag. Check the [Releases](https://github.com/your-username/term-bg/releases) page.
+GitHub Actions automatically builds and publishes binaries for Linux (gnu/musl), macOS (x86_64/arm64), and Windows (x86_64) on every release tag. Check the [Releases](https://github.com/rh42-ic/term-bg/releases) page.
 
 ## Usage
 
@@ -39,7 +38,7 @@ term-bg [-d|-r|-l] [-t <ms>]
 | Flag | Description | Success Output | Timeout / Failure Output | Exit Code |
 |------|-------------|----------------|--------------------------|-----------|
 | `-d` | **[Default]** Dark/Light mode | `dark` or `light` | `dark` | 0 (Success) / 1 (Failure) |
-| `-r` | RGB Hex format | e.g., `#1E1E2E` | `0` | 0 (Success) / 1 (Failure) |
+| `-r` | RGB Hex format | e.g., `#1E1E2E` | `#000000` | 0 (Success) / 1 (Failure) |
 | `-l` | Luma value | Integer `0-255` | `0` | 0 (Success) / 1 (Failure) |
 | `-t` | Timeout in ms | (No output) | (No output) | N/A (Default: 500ms) |
 
@@ -83,7 +82,7 @@ dark
 
 ## Credits
 
-This project is a specialized extraction and optimization of the terminal background detection logic found in [Yazi](https://github.com/sxyazi/yazi). Special thanks to the Yazi team for their robust implementation.
+This project is a specialized extraction and optimization of the terminal background detection logic found in [Yazi](https://github.com/sxyazi/yazi). Special thanks to the Yazi team for their implementation.
 
 ## License
 
