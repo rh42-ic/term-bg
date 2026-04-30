@@ -22,7 +22,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             mode: OutputMode::DarkLight,
-            timeout_ms: 50,
+            timeout_ms: 500,
         }
     }
 }
@@ -175,8 +175,8 @@ fn parse_rgb(resp: &str) -> Option<(u8, u8, u8)> {
 }
 
 fn calculate_luma(r: u8, g: u8, b: u8) -> u8 {
-    let l_int = (r as u32 * 2627 + g as u32 * 6780 + b as u32 * 593) / 10000;
-    l_int as u8
+    let l_int = r as u32 * 218 + g as u32 * 732 + b as u32 * 74 + 512;
+    (l_int >> 10) as u8
 }
 
 fn print_failure(config: &Config) {
