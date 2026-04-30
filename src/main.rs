@@ -1,9 +1,5 @@
-use libc::{c_int, termios, tcgetattr, tcsetattr, TCSANOW, ECHO, ICANON, VMIN, VTIME, fd_set, FD_ZERO, FD_SET, select, timeval, read, write, O_RDWR};
 use std::env;
-use std::ffi::CString;
-use std::io::Error;
 use std::process;
-use std::ptr;
 
 #[derive(Debug, PartialEq)]
 enum OutputMode {
@@ -22,7 +18,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             mode: OutputMode::DarkLight,
-            timeout_ms: 500,
+            timeout_ms: 50,
         }
     }
 }
@@ -66,90 +62,206 @@ fn parse_args() -> Config {
     config
 }
 
-struct TtyState {
-    fd: c_int,
-    original: termios,
-}
+#[cfg(unix)]
+mod tty {
+    use libc::{c_int, fd_set, read, select, tcgetattr, tcsetattr, termios, timeval, write, ECHO, FD_SET, FD_ZERO, ICANON, O_RDWR, TCSANOW, VMIN, VTIME};
+    use std::ffi::CString;
+    use std::io::Error;
+    use std::ptr;
 
-impl TtyState {
-    fn new() -> Result<Self, Error> {
+    pub struct TtyState {
+        fd: c_int,
+        original: termios,
+    }
+
+    impl TtyState {
+        pub fn new() -> Result<Self, Error> {
+            unsafe {
+                let path = CString::new("/dev/tty").unwrap();
+                let fd = libc::open(path.as_ptr(), O_RDWR);
+                if fd < 0 {
+                    return Err(Error::last_os_error());
+                }
+
+                let mut original: termios = std::mem::zeroed();
+                if tcgetattr(fd, &mut original) != 0 {
+                    libc::close(fd);
+                    return Err(Error::last_os_error());
+                }
+
+                let mut raw = original;
+                raw.c_lflag &= !(ECHO | ICANON);
+                raw.c_cc[VMIN] = 0;
+                raw.c_cc[VTIME] = 0;
+
+                if tcsetattr(fd, TCSANOW, &raw) != 0 {
+                    libc::close(fd);
+                    return Err(Error::last_os_error());
+                }
+
+                Ok(Self { fd, original })
+            }
+        }
+    }
+
+    impl Drop for TtyState {
+        fn drop(&mut self) {
+            unsafe {
+                tcsetattr(self.fd, TCSANOW, &self.original);
+                libc::close(self.fd);
+            }
+        }
+    }
+
+    pub fn query_terminal(timeout_ms: u64) -> Result<String, Error> {
+        let tty = TtyState::new()?;
+        let query = b"\x1b]11;?\x07";
+
         unsafe {
-            let path = CString::new("/dev/tty").unwrap();
-            let fd = libc::open(path.as_ptr(), O_RDWR);
-            if fd < 0 {
+            if write(tty.fd, query.as_ptr() as *const libc::c_void, query.len()) < 0 {
                 return Err(Error::last_os_error());
             }
 
-            let mut original: termios = std::mem::zeroed();
-            if tcgetattr(fd, &mut original) != 0 {
-                libc::close(fd);
+            let mut read_fds: fd_set = std::mem::zeroed();
+            FD_ZERO(&mut read_fds);
+            FD_SET(tty.fd, &mut read_fds);
+
+            let mut timeout = timeval {
+                tv_sec: (timeout_ms / 1000) as libc::time_t,
+                tv_usec: ((timeout_ms % 1000) * 1000) as libc::suseconds_t,
+            };
+
+            let ret = select(
+                tty.fd + 1,
+                &mut read_fds,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut timeout,
+            );
+
+            if ret <= 0 {
+                // Timeout or error
+                return Err(Error::from_raw_os_error(libc::ETIMEDOUT));
+            }
+
+            let mut buf = [0u8; 64];
+            let n = read(tty.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+            if n < 0 {
                 return Err(Error::last_os_error());
             }
 
-            let mut raw = original;
-            raw.c_lflag &= !(ECHO | ICANON);
-            raw.c_cc[VMIN] = 0;
-            raw.c_cc[VTIME] = 0;
-
-            if tcsetattr(fd, TCSANOW, &raw) != 0 {
-                libc::close(fd);
-                return Err(Error::last_os_error());
-            }
-
-            Ok(Self { fd, original })
+            Ok(String::from_utf8_lossy(&buf[..n as usize]).into_owned())
         }
     }
 }
 
-impl Drop for TtyState {
-    fn drop(&mut self) {
+#[cfg(windows)]
+mod tty {
+    use std::io::Error;
+    use std::ptr;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0},
+        Storage::FileSystem::{CreateFileA, ReadFile, WriteFile, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING},
+        System::Console::{GetConsoleMode, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT},
+        System::Threading::WaitForSingleObject,
+    };
+
+    pub struct TtyState {
+        in_handle: HANDLE,
+        out_handle: HANDLE,
+        original_mode: u32,
+    }
+
+    impl TtyState {
+        pub fn new() -> Result<Self, Error> {
+            unsafe {
+                let in_handle = CreateFileA(
+                    b"CONIN$\0".as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    ptr::null_mut(),
+                    OPEN_EXISTING,
+                    0,
+                    0,
+                );
+                
+                let out_handle = CreateFileA(
+                    b"CONOUT$\0".as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    ptr::null_mut(),
+                    OPEN_EXISTING,
+                    0,
+                    0,
+                );
+
+                if in_handle == INVALID_HANDLE_VALUE || out_handle == INVALID_HANDLE_VALUE {
+                    if in_handle != INVALID_HANDLE_VALUE { CloseHandle(in_handle); }
+                    if out_handle != INVALID_HANDLE_VALUE { CloseHandle(out_handle); }
+                    return Err(Error::last_os_error());
+                }
+
+                let mut original_mode = 0;
+                if GetConsoleMode(in_handle, &mut original_mode) == 0 {
+                    CloseHandle(in_handle);
+                    CloseHandle(out_handle);
+                    return Err(Error::last_os_error());
+                }
+
+                let raw_mode = original_mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
+                if SetConsoleMode(in_handle, raw_mode) == 0 {
+                    CloseHandle(in_handle);
+                    CloseHandle(out_handle);
+                    return Err(Error::last_os_error());
+                }
+
+                Ok(Self {
+                    in_handle,
+                    out_handle,
+                    original_mode,
+                })
+            }
+        }
+    }
+
+    impl Drop for TtyState {
+        fn drop(&mut self) {
+            unsafe {
+                SetConsoleMode(self.in_handle, self.original_mode);
+                CloseHandle(self.in_handle);
+                CloseHandle(self.out_handle);
+            }
+        }
+    }
+
+    pub fn query_terminal(timeout_ms: u64) -> Result<String, Error> {
+        let tty = TtyState::new()?;
+        let query = b"\x1b]11;?\x07";
+
         unsafe {
-            tcsetattr(self.fd, TCSANOW, &self.original);
-            libc::close(self.fd);
+            let mut written = 0;
+            if WriteFile(tty.out_handle, query.as_ptr() as _, query.len() as u32, &mut written, ptr::null_mut()) == 0 {
+                return Err(Error::last_os_error());
+            }
+
+            match WaitForSingleObject(tty.in_handle, timeout_ms as u32) {
+                WAIT_OBJECT_0 => {}
+                WAIT_FAILED => return Err(Error::last_os_error()),
+                _ => return Err(Error::from_raw_os_error(110)), // ETIMEDOUT equivalent
+            }
+
+            let mut buf = [0u8; 64];
+            let mut read_bytes = 0;
+            if ReadFile(tty.in_handle, buf.as_mut_ptr() as _, buf.len() as u32, &mut read_bytes, ptr::null_mut()) == 0 {
+                return Err(Error::last_os_error());
+            }
+
+            Ok(String::from_utf8_lossy(&buf[..read_bytes as usize]).into_owned())
         }
     }
 }
 
-fn query_terminal(timeout_ms: u64) -> Result<String, Error> {
-    let tty = TtyState::new()?;
-    let query = b"\x1b]11;?\x07";
-
-    unsafe {
-        if write(tty.fd, query.as_ptr() as *const libc::c_void, query.len()) < 0 {
-            return Err(Error::last_os_error());
-        }
-
-        let mut read_fds: fd_set = std::mem::zeroed();
-        FD_ZERO(&mut read_fds);
-        FD_SET(tty.fd, &mut read_fds);
-
-        let mut timeout = timeval {
-            tv_sec: (timeout_ms / 1000) as libc::time_t,
-            tv_usec: ((timeout_ms % 1000) * 1000) as libc::suseconds_t,
-        };
-
-        let ret = select(
-            tty.fd + 1,
-            &mut read_fds,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            &mut timeout,
-        );
-
-        if ret <= 0 {
-            // Timeout or error
-            return Err(Error::from_raw_os_error(libc::ETIMEDOUT));
-        }
-
-        let mut buf = [0u8; 64];
-        let n = read(tty.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
-        if n < 0 {
-            return Err(Error::last_os_error());
-        }
-
-        Ok(String::from_utf8_lossy(&buf[..n as usize]).into_owned())
-    }
-}
+use tty::query_terminal;
 
 fn parse_rgb(resp: &str) -> Option<(u8, u8, u8)> {
     // Look for "]11;rgb:"
