@@ -15,9 +15,18 @@ The background detection logic is extracted from [Yazi](https://github.com/sxyaz
 You can compile it directly with Cargo. The `Cargo.toml` is already pre-configured to optimize for binary size (`opt-level = "z"`, `lto = true`, `strip = true`).
 
 ```bash
+# Standard glibc build (Linux) or macOS/Windows
 cargo build --release
+
+# Musl build (Linux) for ultimate portability and startup speed
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+
 cp target/release/term-bg ~/.local/bin/
 ```
+
+### Pre-built Binaries
+GitHub Actions automatically builds and publishes binaries for Linux (gnu/musl), macOS (x86_64/arm64), and Windows (x86_64) on every release tag. Check the [Releases](https://github.com/your-username/term-bg/releases) page.
 
 ## Usage
 
@@ -71,3 +80,11 @@ dark
 6. Calculates the Luma using the integer-optimized BT.709 formula: `(R*218 + G*732 + B*74 + 512) >> 10`.
 7. Checks if the Luma crosses the `153` threshold to determine `light` or `dark`.
 8. Restores the exact `termios` state and exits.
+
+## Credits
+
+This project is a specialized extraction and optimization of the terminal background detection logic found in [Yazi](https://github.com/sxyazi/yazi). Special thanks to the Yazi team for their robust implementation.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
